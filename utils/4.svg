@@ -1,0 +1,36 @@
+<svg width="400" height="200" xmlns="http://www.w3.org/2000/svg">
+  <!-- 背景网格 -->
+  <rect width="400" height="200" fill="#f0f0f0"/>
+  
+  <!-- 价格走势 -->
+  <path d="M0,150 L50,175 L100,50 L150,75 L200,25 L250,50 L300,75 L350,25 L400,0" stroke="black" fill="none"/>
+  
+  <!-- AVWAP_Open (510, Y=50) -->
+  <path d="M0,50 H400" stroke="green" stroke-dasharray="5" stroke-width="2"/>
+  <circle cx="0" cy="50" r="4" fill="green"/> <!-- 锚点 9:30 -->
+  
+  <!-- AVWAP_Low (495, Y=150) -->
+  <path d="M50,150 H400" stroke="red" stroke-dasharray="5" stroke-width="2"/>
+  <circle cx="50" cy="150" r="4" fill="red"/> <!-- 锚点 9:45 -->
+  
+  <!-- AVWAP_High (520, Y=25) -->
+  <path d="M200,25 H400" stroke="blue" stroke-dasharray="5" stroke-width="2"/>
+  <circle cx="200" cy="25" r="4" fill="blue"/> <!-- 锚点 10:15 -->
+  
+  <!-- TWAP (505-510, Y=75-50) -->
+  <path d="M0,75 L200,75 L400,50" stroke="purple" stroke-dasharray="5" stroke-width="2"/>
+  
+  <!-- 回归买入 (10:00, X=100) -->
+  <line x1="100" y1="75" x2="100" y2="50" stroke="blue" stroke-width="2"/>
+  <text x="90" y="85" font-size="12">回归买入</text>
+  
+  <!-- 趋势买入 (10:30, X=250) -->
+  <line x1="250" y1="50" x2="250" y2="25" stroke="blue" stroke-width="2"/>
+  <text x="240" y="60" font-size="12">趋势买入</text>
+  
+  <!-- 标签 -->
+  <text x="10" y="45" font-size="12" fill="green">AVWAP_Open (510)</text>
+  <text x="60" y="145" font-size="12" fill="red">AVWAP_Low (495)</text>
+  <text x="210" y="20" font-size="12" fill="blue">AVWAP_High (520)</text>
+  <text x="10" y="70" font-size="12" fill="purple">TWAP (505-510)</text>
+</svg>

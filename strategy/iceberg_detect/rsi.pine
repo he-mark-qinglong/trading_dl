@@ -1,0 +1,139 @@
+
+//@version=6
+indicator(title="Relative Strength Index with Divergence Markers and Optimized Price High Markers", shorttitle="RSI+Divergence+HighMarkers", format=format.price, precision=2)
+
+// === Input parameters ===
+rsiLengthInput = input.int(13, minval=1, title="RSI Length", group="RSI Settings")
+rsiSourceInput = input.source(close, "Source", group="RSI Settings")
+calculateDivergence = input.bool(false, title="Calculate Divergence", group="RSI Settings", display=display.data_window, tooltip="Calculating divergences is needed in order for divergence alerts to fire.")
+
+// RSI band inputs
+rsiUpperBandValue = input.int(80, title="RSI Upper Band", group="RSI Settings")
+rsiLowerBandValue = input.int(20, title="RSI Lower Band", group="RSI Settings")
+
+// RSI calculation
+change = ta.change(rsiSourceInput)
+up = ta.rma(math.max(change, 0), rsiLengthInput)
+down = ta.rma(-math.min(change, 0), rsiLengthInput)
+rsi = down == 0 ? 100 : up == 0 ? 0 : 100 - (100 / (1 + up / down))
+rsiPlot = plot(rsi, "RSI", color=#7E57C2)
+
+// RSI bands and background fill
+rsiUpperBand = hline(rsiUpperBandValue, "RSI Upper Band", color=#787B86)
+midline = hline(50, "RSI Middle Band", color=color.new(#787B86, 50))
+rsiLowerBand = hline(rsiLowerBandValue, "RSI Lower Band", color=#787B86)
+fill(rsiUpperBand, rsiLowerBand, color=color.rgb(126, 87, 194, 90), title="RSI Background Fill")
+
+midLinePlot = plot(50, color=na, editable=false, display=display.none)
+// Gradient fills for overbought and oversold RSI regions
+fill(rsiPlot, midLinePlot, 100, 70, top_color=color.new(color.green, 0), bottom_color=color.new(color.green, 100), title="Overbought Gradient Fill")
+fill(rsiPlot, midLinePlot, 30, 0, top_color=color.new(color.red, 100), bottom_color=color.new(color.red, 0), title="Oversold Gradient Fill")
+
+// === Smoothing MA Inputs ===
+GRP = "Smoothing"
+TT_BB = "Only applies when 'SMA + Bollinger Bands' is selected. Determines the distance between the SMA and the bands."
+maTypeInput = input.string("SMA", "Type", options=["None", "SMA", "SMA + Bollinger Bands", "EMA", "SMMA (RMA)", "WMA", "VWMA"], group=GRP, display=display.data_window)
+maLengthInput = input.int(13, "Length", group=GRP, display=display.data_window)
+bbMultInput = input.float(2.0, "BB StdDev", minval=0.001, maxval=50, step=0.5, tooltip=TT_BB, group=GRP, display=display.data_window)
+var enableMA = maTypeInput != "None"
+var isBB = maTypeInput == "SMA + Bollinger Bands"
+
+// MA calculation function
+ma(source, length, MAtype) =>
+    switch MAtype
+        "SMA"                   => ta.sma(source, length)
+        "SMA + Bollinger Bands" => ta.sma(source, length)
+        "EMA"                   => ta.ema(source, length)
+        "SMMA (RMA)"            => ta.rma(source, length)
+        "WMA"                   => ta.wma(source, length)
+        "VWMA"                  => ta.vwma(source, length)
+
+// Calculate smoothing MA and Bollinger Bands
+smoothingMA = enableMA ? ma(rsi, maLengthInput, maTypeInput) : na
+smoothingStDev = isBB ? ta.stdev(rsi, maLengthInput) * bbMultInput : na
+plot(smoothingMA, "RSI-based MA", color=color.yellow, display=enableMA ? display.all : display.none, editable=enableMA)
+bbUpperBand = plot(isBB ? smoothingMA + smoothingStDev : na, title="Upper Bollinger Band", color=color.green, display=isBB ? display.all : display.none, editable=isBB)
+bbLowerBand = plot(isBB ? smoothingMA - smoothingStDev : na, title="Lower Bollinger Band", color=color.green, display=isBB ? display.all : display.none, editable=isBB)
+fill(bbUpperBand, bbLowerBand, color=isBB ? color.new(color.green, 90) : na, title="Bollinger Bands Background Fill", display=isBB ? display.all : display.none, editable=isBB)
+
+// === Divergence ===
+lookbackRight = 5
+lookbackLeft = 5
+rangeUpper = 60
+rangeLower = 5
+bearColor = color.red
+bullColor = color.green
+textColor = color.white
+noneColor = color.new(color.white, 100)
+
+_inRange(bool cond) =>
+    bars = ta.barssince(cond)
+    rangeLower <= bars and bars <= rangeUpper
+
+plFound = false
+phFound = false
+bullCond = false
+bearCond = false
+
+rsiLBR = rsi[lookbackRight]
+
+if calculateDivergence
+    // Regular Bullish divergence:
+    plFound := not na(ta.pivotlow(rsi, lookbackLeft, lookbackRight))
+    rsiHL = rsiLBR > ta.valuewhen(plFound, rsiLBR, 1) and _inRange(plFound[1])
+    lowLBR = low[lookbackRight]
+    priceLL = lowLBR < ta.valuewhen(plFound, lowLBR, 1)
+    bullCond := priceLL and rsiHL and plFound
+
+    // Regular Bearish divergence:
+    phFound := not na(ta.pivothigh(rsi, lookbackLeft, lookbackRight))
+    rsiLH = rsiLBR < ta.valuewhen(phFound, rsiLBR, 1) and _inRange(phFound[1])
+    highLBR = high[lookbackRight]
+    priceHH = highLBR > ta.valuewhen(phFound, highLBR, 1)
+    bearCond := priceHH and rsiLH and phFound
+
+plot(plFound ? rsiLBR : na, offset=-lookbackRight, title="Regular Bullish", linewidth=2, color=(bullCond ? bullColor : noneColor), display=display.pane, editable=calculateDivergence)
+plotshape(bullCond ? rsiLBR : na, offset=-lookbackRight, title="Regular Bullish Label", text=" Bull ", style=shape.labelup, location=location.absolute, color=bullColor, textcolor=textColor, display=display.pane, editable=calculateDivergence)
+plot(phFound ? rsiLBR : na, offset=-lookbackRight, title="Regular Bearish", linewidth=2, color=(bearCond ? bearColor : noneColor), display=display.pane, editable=calculateDivergence)
+plotshape(bearCond ? rsiLBR : na, offset=-lookbackRight, title="Regular Bearish Label", text=" Bear ", style=shape.labeldown, location=location.absolute, color=bearColor, textcolor=textColor, display=display.pane, editable=calculateDivergence)
+
+// Alert conditions
+alertcondition(bullCond, title='Regular Bullish Divergence', message="Found a new Regular Bullish Divergence, `Pivot Lookback Right` number of bars to the left of the current bar.")
+alertcondition(bearCond, title='Regular Bearish Divergence', message="Found a new Regular Bearish Divergence, `Pivot Lookback Right` number of bars to the left of the current bar.")
+
+// === 新增优化逻辑：记录满足RSI>=80时的价格及对应最高点，后续价格创新高但RSI未创新高标记 ===
+lengthForHigh = 100
+
+var float maxPriceRsi80 = na
+var int maxPriceRsi80Index = na
+var float rsiAtMaxPriceRsi80 = na
+
+// 记录当前bar是否RSI大于等于阈值
+rsiAboveThreshold = rsi >= rsiUpperBandValue
+
+// 更新记录的最高价格点（当RSI >= 80）
+// 如果当前bar满足条件且价格高于之前记录，则更新记录
+if rsiAboveThreshold
+    if na(maxPriceRsi80) or high > maxPriceRsi80
+        maxPriceRsi80 := high
+        maxPriceRsi80Index := bar_index
+        rsiAtMaxPriceRsi80 := rsi
+
+// 判断当前bar是否价格创新高，且是在记录后的bar（防止标记过时点）
+priceIsNewHighAfterRecord = (high > ta.highest(high, lengthForHigh)[1]) and na(maxPriceRsi80Index) and (bar_index > maxPriceRsi80Index)
+// Plot label when condition met  
+if priceIsNewHighAfterRecord  
+    label.new(bar_index, high, text="Price New High", color=color.new(color.green, 0), style=label.style_label_up, textcolor=color.white, yloc=yloc.abovebar)  
+
+// RSI是否创新高（比较当前RSI与记录点RSI）
+rsiIsNewHighAfterRecord = (rsi > rsiAtMaxPriceRsi80)
+
+// 标记条件：价格创新高但RSI未创新高
+priceHighNoRSINewHigh = priceIsNewHighAfterRecord and not rsiIsNewHighAfterRecord
+
+// 按条件在RSI值上绘制红色向下三角形
+plotshape(priceHighNoRSINewHigh ? rsi : na, title="Price High but RSI No New High After RSI>=80", style=shape.triangledown, size=size.small, color=color.red, location=location.absolute)
+
+// Alert for this condition
+alertcondition(priceHighNoRSINewHigh, title="Price New High but RSI No New High After RSI >= Upper Band", message="Price made a new high after RSI was >= upper band, but RSI did not make a new high.")
+

@@ -1,0 +1,157 @@
+//@version=6   
+strategy("Hidden Volume Detector 双边策略 (诊断小影线连跌/涨，不三连入场)", overlay=true, initial_capital=100000,   
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100)  
+
+// ========== 参数设置 ==========  
+length         = input.int(60, "平均成交量周期")  
+volMultiplier  = input.float(0.35, "成交量阈值倍数", step=0.05)  
+priceDeviation = input.float(1.5, "价格偏离阈值 (%)", step=0.1)  
+leverage       = input.int(100, "杠杆倍数", minval=1) // 用户输入杠杆倍数  
+
+// VP参数  
+vpLen = input.int(300, "VP周期")  
+
+// 成交量缩放因子  
+volumeScale = input.float(1e6, "成交量缩放因子", step=1e5)  
+
+// 动态低量阈值  
+avgVol          = ta.sma(volume, length)  
+lowVolThreshold = avgVol * volMultiplier  
+
+// 使用EMA实现时间加权的VP POC  
+tau   = input.int(14, "Tau周期")  
+vpPOC = ta.ema(close * volume, tau) / ta.ema(volume, tau)  
+
+// 计算成交量加权标准差（采用传统计算方式）  
+vpVariance = math.sum(volume * math.pow(close - vpPOC, 2), vpLen) / math.sum(volume, vpLen)  
+vpStd      = math.sqrt(vpVariance)  
+
+// 计算 ATR 值（使用选定平滑方式）  
+atrLen    = input.int(title="ATR周期", defval=14, minval=1)  
+smoothing  = input.string(title="ATR平滑方式", defval="RMA", options=["RMA", "SMA", "EMA", "WMA"])  
+ma_function(source, atrLen) =>  
+    switch smoothing  
+        "RMA" => ta.rma(source, atrLen)  
+        "SMA" => ta.sma(source, atrLen)  
+        "EMA" => ta.ema(source, atrLen)  
+        =>      ta.wma(source, atrLen)  
+atrValue = ma_function(ta.tr(true), atrLen)  
+
+// 计算 ATR 均值  
+atrAvgLen = input.int(title="ATR均值周期", defval=14, minval=1)  
+atrAvg    = ta.sma(atrValue, atrAvgLen)  
+
+// 填充带颜色：若 ATR 高于均值1.2倍则为黄色（异常），否则为蓝色  
+bandColor = atrValue > 1.2 * atrAvg ? color.new(color.yellow, 70) : color.new(color.blue, 70)  
+
+// 记录连续ATR异常的数量  
+atrHigh = atrValue > 1.2 * atrAvg  
+var int yellowCount = 0  
+yellowCount := atrHigh ? yellowCount + 1 : 0  
+// 当连续5根K线ATR为黄色时，视为ATR异常，不介入  
+atrAnomaly = yellowCount >= 5  
+
+// 定义VP的标准差边界  
+upperVP  = vpPOC + 2.5 * vpStd    // 正2σ边界  
+upperVP1 = vpPOC + 2.1 * vpStd    // 正1σ边界  
+lowerVP1 = vpPOC - 2.1 * vpStd    // 负1σ边界  
+lowerVP  = vpPOC - 2.5 * vpStd    // 负2σ边界  
+
+// ========== 可视化绘制 ==========  
+plot(vpPOC, title="VP POC (时间加权)", color=color.new(color.yellow, 50), style=plot.style_line, linewidth=3)  
+pUpper  = plot(upperVP,  title="VP上边界(2σ)", color=color.new(color.blue, 50), style=plot.style_line, linewidth=1)  
+pLower  = plot(lowerVP,  title="VP下边界(2σ)", color=color.new(color.blue, 50), style=plot.style_line, linewidth=1)  
+pUpper1 = plot(upperVP1, title="VP上边界(1σ)", color=color.new(color.green, 50), style=plot.style_line, linewidth=1)  
+pLower1 = plot(lowerVP1, title="VP下边界(1σ)", color=color.new(color.green, 50), style=plot.style_line, linewidth=1)  
+fill(pUpper, pUpper1, color=bandColor)  
+fill(pLower1, pLower, color=bandColor)  
+
+// ========== 无影线判断相关 ==========  
+marubozuBull(offset) =>  
+    range_shadow = high[offset] - close[offset]  
+    range_shadow > 0 and close[offset] > open[offset] and (close[offset] - open[offset]) / range_shadow >= 0.9  
+
+f_bull_count(maxBars) =>  
+    count = 0  
+    for i = 1 to maxBars  
+        if marubozuBull(i)  
+            count := count + 1  
+        else  
+            break  
+    count  
+
+shortMarubozuFilter = (f_bull_count(6) < 3)  
+
+marubozuBear(offset) =>  
+    range_shadow = close[offset] - low[offset]  
+    range_shadow > 0 and close[offset] < open[offset] and (open[offset] - close[offset]) / range_shadow >= 0.9  
+
+f_bear_count(maxBars) =>  
+    count = 0  
+    for i = 1 to maxBars  
+        if marubozuBear(i)  
+            count := count + 1  
+        else  
+            break  
+    count  
+
+longMarubozuFilter = (f_bear_count(6) < 3)  
+
+// ========== 小影线连跌/连涨判断 ==========  
+smallShadowDown(offset) =>  
+    isDown = close[offset] < open[offset]  
+    kline_range = high[offset] - low[offset]  
+    lowerShadow = close[offset] - low[offset]  
+    isDown and kline_range > 0 and (lowerShadow / kline_range) < 0.1  
+smallDownPattern = smallShadowDown(1) and smallShadowDown(2) and smallShadowDown(3)  
+
+smallShadowUp(offset) =>  
+    isUp = close[offset] > open[offset]  
+    kline_range = high[offset] - low[offset]  
+    upperShadow = high[offset] - close[offset]  
+    isUp and kline_range > 0 and (upperShadow / kline_range) < 0.1  
+smallUpPattern = smallShadowUp(1) and smallShadowUp(2) and smallShadowUp(3)  
+
+// ========== 入场条件 ==========  
+longEntryCond  = ta.crossunder(low, lowerVP1) //and (not atrAnomaly) and longMarubozuFilter and (not smallDownPattern)  
+shortEntryCond = ta.crossover(high, upperVP1) //and (not atrAnomaly) and shortMarubozuFilter and (not smallUpPattern)  
+
+// ========== 策略执行 & 出场逻辑 ==========  
+if (shortEntryCond)  
+    strategy.entry("Short", strategy.short)  
+
+if (longEntryCond)  
+    strategy.entry("Long", strategy.long)  
+
+// -------- 更新初始本金 及 所有权益 --------  
+var float initialCapital = strategy.initial_capital // 初始本金  
+var float currentEquity = initialCapital // 当前权益，开始时为初始本金  
+
+// 当前权益浮动  
+currentEquity := strategy.equity  
+
+// 计算权益浮动亏损(以初始本金为基准)  
+float equityChange = ((currentEquity - initialCapital) / initialCapital) * 100   
+
+// 平仓条件：权益累计亏损达到-2%  
+if (equityChange <= -2)  
+    strategy.close("Long", comment="Stop Loss 2%")  
+    strategy.close("Short", comment="Stop Loss 2%")  
+
+// -------- 多头止盈逻辑 --------  
+if (strategy.position_size > 0)  
+    float longMargin = (strategy.position_size * strategy.position_avg_price) / leverage // 多头的保证金  
+    if ((close - strategy.position_avg_price) / longMargin * 100 >= 25)  
+        strategy.close("Long", comment="Take Profit 25%")  
+
+// -------- 空头止盈逻辑 --------  
+if (strategy.position_size < 0)  
+    float shortMargin = (strategy.position_size * strategy.position_avg_price) / leverage // 空头的保证金  
+    if ((strategy.position_avg_price - close) / shortMargin * 100 >= 25)  
+        strategy.close("Short", comment="Take Profit 25%")  
+
+// ========== 图形入场条件标记 ==========  
+plotshape(longEntryCond, title="Long Signal", style=shape.triangleup, location=location.belowbar,   
+   color=color.new(color.green, 0), size=size.normal)  
+plotshape(shortEntryCond, title="Short Signal", style=shape.triangledown, location=location.abovebar,   
+   color=color.new(color.red, 0), size=size.normal)  

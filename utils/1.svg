@@ -1,0 +1,26 @@
+<svg width="400" height="200" xmlns="http://www.w3.org/2000/svg">
+  <!-- 背景网格 -->
+  <rect width="400" height="200" fill="#f0f0f0"/>
+  
+  <!-- 价格走势 -->
+  <path d="M0,150 L50,130 L100,50 L150,130 L200,110 L250,130 L300,70 L350,130 L400,110" stroke="black" fill="none"/>
+  
+  <!-- AVWAP_Open (510, Y=50) -->
+  <path d="M0,50 H400" stroke="green" stroke-dasharray="5" stroke-width="2"/>
+  <circle cx="0" cy="50" r="4" fill="green"/> <!-- 锚点 9:30 -->
+  
+  <!-- TWAP (505, Y=75) -->
+  <path d="M0,75 H400" stroke="purple" stroke-dasharray="5" stroke-width="2"/>
+  
+  <!-- 回归买入 (10:00, X=150) -->
+  <line x1="150" y1="130" x2="150" y2="50" stroke="blue" stroke-width="2"/>
+  <text x="140" y="140" font-size="12">回归买入</text>
+  
+  <!-- 回归卖出 (10:30, X=300) -->
+  <line x1="300" y1="70" x2="300" y2="50" stroke="red" stroke-width="2"/>
+  <text x="290" y="80" font-size="12">回归卖出</text>
+  
+  <!-- 标签 -->
+  <text x="10" y="45" font-size="12" fill="green">AVWAP_Open (510)</text>
+  <text x="10" y="70" font-size="12" fill="purple">TWAP (505)</text>
+</svg>

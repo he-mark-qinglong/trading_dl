@@ -1,0 +1,236 @@
+//@version=6
+indicator("VPVR Fixed Range with Bar Shift (EMA Decay)", overlay=true, max_boxes_count=12000)
+
+// ====== 参数区 ======
+LINE_COLOR      = color.new(color.gray, 25)
+BORDER_COLOR    = color.new(color.black, 80)
+BUY_COLOR       = color.new(color.blue, 25)
+SELL_COLOR      = color.new(color.yellow, 25)
+DELTA_UP_COLOR  = color.new(color.green, 0)
+DELTA_DOWN_COLOR= color.new(color.red, 0)
+DELTA_EQ_COLOR  = color.new(color.gray, 60)
+
+scaleFactor         = input.int(4,    "Scale Factor", minval=1, maxval=24, step=1)
+widthScaleFactor    = input.float(0.02, "Width Scale Factor", minval=0.01, maxval=0.5, step=0.01)
+numOfBars           = input.int(100, 'Number of bars (range length)', minval=10, maxval=1000)
+numOfHistograms     = input.int(100, 'Number of histograms', minval=40, maxval=200)
+widestHistogramWidth= math.round(input.int(100, 'Width of the PoC', minval=20, maxval=100) * scaleFactor)
+barToLeftDist       = input.int(1,   'Distance to newest bar', minval=1, maxval=30)
+vpDecayLen          = input.int(150, "VP EMA Decay 半衰期(Bar数)", minval=2, maxval=200)
+alpha               = 0.1 / (vpDecayLen + 1)
+topBottomLineColor  = input.color(LINE_COLOR, "Top/bottom Line Color")
+
+// ====== 固定区间锚点输入方案 ======
+barsFromNow = input.int(0, "锚点距离最新bar多少根(0为最新)", minval=0)
+
+// 锚点bar编号
+anchorBarIndex = bar_index - barsFromNow
+
+// 区间起止编号 (只用于主图辅助标注，并不是shift用的)
+startBarIndex = math.max(anchorBarIndex - numOfBars + 1, 0)
+endBarIndex   = anchorBarIndex
+
+// 区间高低，关键用法：shift barsFromNow
+rangeHigh = ta.highest(high, numOfBars)[barsFromNow]
+rangeLow  = ta.lowest(low, numOfBars)[barsFromNow]
+rangeHeight  = rangeHigh - rangeLow
+histogramHeight = rangeHeight / numOfHistograms
+
+// ====== 可视化锚点bar区间 ======
+var box anchorBox = na
+if barstate.islast
+    if not na(anchorBox)
+        box.delete(anchorBox)
+    // 在锚点bar处做一个紫色竖带，用于视觉定位
+    anchorBox := box.new(left   = anchorBarIndex, top    = high[barsFromNow], right  = anchorBarIndex, bottom = low[barsFromNow], bgcolor=color.new(color.purple, 85), border_color=color.new(color.purple, 0) )
+
+// ====== VPVR主结构数据初始化 ======
+var float[] histogramLowList        = array.new_float(numOfHistograms, na)
+var float[] histogramHighList       = array.new_float(numOfHistograms, na)
+var float[] histogramPriceList      = array.new_float(numOfHistograms, 0.0)
+var float[] histogramBuyVolumeList  = array.new_float(numOfHistograms, 0.0)
+var float[] histogramSellVolumeList = array.new_float(numOfHistograms, 0.0)
+var float[] histogramDeltaVolList   = array.new_float(numOfHistograms, 0.0)
+var box[] buyBars      = array.new_box(500*scaleFactor, na)
+var box[] sellBars     = array.new_box(500*scaleFactor, na)
+var box[] deltaBars    = array.new_box(500*scaleFactor, na)
+var line vpvrBorderLine = na
+
+// 清理
+for i = 0 to array.size(buyBars) - 1
+    box.delete(array.get(buyBars, i))
+for i = 0 to array.size(sellBars) - 1
+    box.delete(array.get(sellBars, i))
+for i = 0 to array.size(deltaBars) - 1
+    box.delete(array.get(deltaBars, i))
+
+// =========== VPVR实现 ==============
+if barstate.islast
+    // 1. 初始化分桶
+    for i = 0 to numOfHistograms - 1
+        reversed_i    = numOfHistograms - 1 - i
+        histogramLow  = rangeLow + histogramHeight * reversed_i
+        histogramHigh = rangeLow + histogramHeight * (reversed_i + 1)
+        array.set(histogramLowList, i, histogramLow)
+        array.set(histogramHighList, i, histogramHigh)
+        array.set(histogramPriceList, i, (histogramLow + histogramHigh) / 2)
+
+    // 2. 初始化直方累计
+    for i = 0 to numOfHistograms - 1
+        array.set(histogramBuyVolumeList,  i, 0.0)
+        array.set(histogramSellVolumeList, i, 0.0)
+        array.set(histogramDeltaVolList,   i, 0.0)
+
+    // 3. 统计区间买卖量
+    // barsFromNow + (numOfBars-1) 是统计窗口的“最老”数据（左端），barsFromNow是锚点（右端）
+    for k = 0 to numOfBars - 1
+        // shift索引
+        barIdx = barsFromNow + (numOfBars - 1 - k)
+        if barIdx <= bar_index and barIdx >= 0
+            curHigh  = high[barIdx]
+            curLow   = low[barIdx]
+            curClose = close[barIdx]
+            curVol   = volume[barIdx]
+            barH     = curHigh - curLow
+            currentBuyVolume  = barH == 0 ? 0 : curVol * (curClose - curLow) / barH
+            currentSellVolume = barH == 0 ? 0 : curVol * (curHigh  - curClose) / barH
+            deltaVol = currentBuyVolume - currentSellVolume
+            ema_weight = 1.0 // 如你要做衰减可定制
+
+            for j = 0 to numOfHistograms - 1
+                bucketLow  = array.get(histogramLowList, j)
+                bucketHigh = array.get(histogramHighList, j)
+
+                overlap = math.max( 0, math.min(bucketHigh, curHigh) - math.max(bucketLow, curLow) )
+                histogramVolumePercentage = barH == 0 ? 0 : overlap / barH
+
+                if histogramVolumePercentage > 0
+                    buyVol  = array.get(histogramBuyVolumeList, j)
+                    sellVol = array.get(histogramSellVolumeList, j)
+                    deltaV  = array.get(histogramDeltaVolList, j)
+                    array.set(histogramBuyVolumeList,  j, buyVol  + currentBuyVolume  * histogramVolumePercentage * ema_weight)
+                    array.set(histogramSellVolumeList, j, sellVol + currentSellVolume * histogramVolumePercentage * ema_weight)
+                    array.set(histogramDeltaVolList,   j, deltaV  + deltaVol         * histogramVolumePercentage * ema_weight)
+
+    // 4. 最大柱宽
+    highestHistogramVolume = 0.0
+    for i = 0 to numOfHistograms - 1
+        buyVol  = array.get(histogramBuyVolumeList, i)
+        sellVol = array.get(histogramSellVolumeList, i)
+        histogramVolume = buyVol + sellVol
+        highestHistogramVolume := math.max(highestHistogramVolume, histogramVolume)
+
+    // 5. 画图参数
+    maxDeltaWidth = 0.0
+    deltaWidths = array.new_float(numOfHistograms, 0.0)
+    deltaWidthScale = widestHistogramWidth * widthScaleFactor
+    for i = 0 to numOfHistograms - 1
+        deltaVol_i = array.get(histogramDeltaVolList, i)
+        deltaWidth_i = highestHistogramVolume == 0 ? 0 : (math.abs(deltaVol_i) / highestHistogramVolume * deltaWidthScale)
+        array.set(deltaWidths, i, deltaWidth_i)
+        maxDeltaWidth := math.max(maxDeltaWidth, deltaWidth_i)
+
+    baseBarIndex = anchorBarIndex
+
+    // 6. 框线&直方图
+    vpvrLeftBase = baseBarIndex + maxDeltaWidth + barToLeftDist
+    vpvrLeftBaseInt = int(math.round(vpvrLeftBase))
+
+    if not na(vpvrBorderLine)
+        line.delete(vpvrBorderLine)
+    vpvrBorderLine := line.new(x1=vpvrLeftBaseInt, y1=rangeLow, x2=vpvrLeftBaseInt, y2=rangeHigh, xloc=xloc.bar_index, extend=extend.none, color=color.new(color.black, 0), width=1)
+
+    for i = 0 to numOfHistograms - 1
+        histogramLow  = array.get(histogramLowList, i)
+        histogramHigh = array.get(histogramHighList, i)
+        buyVol  = array.get(histogramBuyVolumeList, i)
+        sellVol = array.get(histogramSellVolumeList, i)
+        deltaVol = array.get(histogramDeltaVolList, i)
+        histogramVolume = buyVol + sellVol
+
+        histogramWidth = highestHistogramVolume == 0 ? 0 : (widestHistogramWidth * histogramVolume / highestHistogramVolume * widthScaleFactor)
+        histogramBuyWidth  = histogramVolume == 0 ? 0 : math.floor(histogramWidth * buyVol  / histogramVolume)
+        histogramSellWidth = histogramVolume == 0 ? 0 : math.floor(histogramWidth * sellVol / histogramVolume)
+
+        deltaWidth = array.get(deltaWidths, i)
+        deltaLeft = baseBarIndex + barToLeftDist
+        deltaRight = deltaLeft + deltaWidth
+        deltaColor = deltaVol > 0 ? DELTA_UP_COLOR : (deltaVol < 0 ? DELTA_DOWN_COLOR : DELTA_EQ_COLOR)
+
+        buyLeft  = vpvrLeftBase
+        buyRight = buyLeft + histogramBuyWidth
+        sellLeft = buyRight
+        sellRight = sellLeft + histogramSellWidth
+
+        array.set(deltaBars, i, box.new(left=int(deltaLeft), top=histogramHigh, right=int(deltaRight), bottom=histogramLow, bgcolor=deltaColor, border_color=BORDER_COLOR))
+        array.set(buyBars,   i, box.new(left=int(buyLeft),  top=histogramHigh, right=int(buyRight),  bottom=histogramLow, bgcolor=BUY_COLOR,  border_color=BORDER_COLOR))
+        array.set(sellBars,  i, box.new(left=int(sellLeft), top=histogramHigh, right=int(sellRight), bottom=histogramLow, bgcolor=SELL_COLOR, border_color=BORDER_COLOR))
+
+// ===== 区间最高/最低线 =====
+var line highLine = na
+var line lowLine = na
+if barstate.islast
+    intervalHigh = ta.highest(high, numOfBars)[barsFromNow]
+    intervalLow  = ta.lowest(low, numOfBars)[barsFromNow]
+    if na(highLine)
+        highLine := line.new(anchorBarIndex - numOfBars + 1, intervalHigh, anchorBarIndex, intervalHigh, xloc=xloc.bar_index, extend=extend.none, color=color.yellow, width=2)
+    else
+        line.set_xy1(highLine, anchorBarIndex - numOfBars + 1, intervalHigh)
+        line.set_xy2(highLine, anchorBarIndex, intervalHigh)
+    if na(lowLine)
+        lowLine := line.new(anchorBarIndex - numOfBars + 1, intervalLow, anchorBarIndex, intervalLow, xloc=xloc.bar_index, extend=extend.none, color=color.blue, width=2)
+    else
+        line.set_xy1(lowLine, anchorBarIndex - numOfBars + 1, intervalLow)
+        line.set_xy2(lowLine, anchorBarIndex, intervalLow)
+
+// ===== 百分位线 =====
+var line pctLine_lower = na
+var line pctLine_upper = na
+if barstate.islast
+    total_vol = 0.0
+    volArr = array.new_float(numOfHistograms, 0.0)
+    for i = 0 to numOfHistograms - 1
+        buyVol  = array.get(histogramBuyVolumeList, i)
+        sellVol = array.get(histogramSellVolumeList, i)
+        v = buyVol + sellVol
+        array.set(volArr, i, v)
+        total_vol += v
+
+    cum_vol = 0.0
+    int lower_idx = na
+    for i = 0 to numOfHistograms - 1
+        cum_vol += array.get(volArr, i)
+        if na(lower_idx) and total_vol > 0 and cum_vol / total_vol >= 0.05
+            lower_idx := i
+
+    cum_vol := 0.0
+    int upper_idx = na
+    for k = 0 to numOfHistograms - 1
+        i = numOfHistograms - 1 - k
+        cum_vol += array.get(volArr, i)
+        if na(upper_idx) and total_vol > 0 and cum_vol / total_vol >= 0.05
+            upper_idx := i
+
+    if not na(lower_idx)
+        price_lower = array.get(histogramPriceList, lower_idx)
+        if na(pctLine_lower)
+            pctLine_lower := line.new(anchorBarIndex - numOfBars + 1, price_lower, anchorBarIndex, price_lower, xloc=xloc.bar_index, extend=extend.none, color=color.teal, width=2, style=line.style_dashed)
+        else
+            line.set_xy1(pctLine_lower, anchorBarIndex - numOfBars + 1, price_lower)
+            line.set_xy2(pctLine_lower, anchorBarIndex, price_lower)
+    else
+        if not na(pctLine_lower)
+            line.delete(pctLine_lower)
+            pctLine_lower := na
+
+    if not na(upper_idx)
+        price_upper = array.get(histogramPriceList, upper_idx)
+        if na(pctLine_upper)
+            pctLine_upper := line.new(anchorBarIndex - numOfBars + 1, price_upper, anchorBarIndex, price_upper, xloc=xloc.bar_index, extend=extend.none, color=color.teal, width=2, style=line.style_dashed)
+        else
+            line.set_xy1(pctLine_upper, anchorBarIndex - numOfBars + 1, price_upper)
+            line.set_xy2(pctLine_upper, anchorBarIndex, price_upper)
+    else
+        if not na(pctLine_upper)
+            line.delete(pctLine_upper)
+            pctLine_upper := na

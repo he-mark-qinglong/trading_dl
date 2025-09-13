@@ -1,0 +1,25 @@
+//@version=6
+indicator("主图贴底缩放成交量柱（红涨绿跌，标准差）", overlay=false)
+
+volumeMAPeriod = input.int(100, "MA Period")
+volumeScale    = input.float(0.15, "Volume缩放（0.01~0.5）", step=0.01, minval=0.01, maxval=1)
+
+smaVolume = ta.sma(volume, volumeMAPeriod)
+stdDev    = ta.stdev(volume, volumeMAPeriod)
+upperBound = smaVolume + 1.5 * stdDev
+lowerBound = smaVolume + 0.5 * stdDev
+
+getAlphaByVolume(float vol) =>
+    vol < lowerBound ? 80 : vol > upperBound ? 30 : 50
+
+volColor = close > close[1] ? color.new(color.green, getAlphaByVolume(volume)) : color.new(color.red, getAlphaByVolume(volume))
+scaledVol = volume * volumeScale
+
+// 矩形主bar
+plot(scaledVol, style=plot.style_columns, color=volColor, title="Volume列")
+
+// 标准差等也要同倍缩放
+plot(smaVolume * volumeScale, title="Volume MA", color=color.gray, style=plot.style_line)
+plot(upperBound * volumeScale, title="上1.5σ", color=color.red, style=plot.style_line)
+plot(lowerBound * volumeScale, title="下0.5σ", color=color.red, style=plot.style_line)
+fill(plot(upperBound * volumeScale), plot(lowerBound * volumeScale), color=color.new(color.red, 90))

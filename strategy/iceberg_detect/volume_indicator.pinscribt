@@ -1,0 +1,63 @@
+//@version=6  
+indicator("Volume with Market Buy/Sell and Neutral Volume Split for Realtime Bars", shorttitle="VolMarketBuySellNeutral_MW", overlay=false)  
+
+// 参数  
+volumeMAPeriod = input.int(20, "MA Period", minval=1, maxval=100)  
+isDisplaySplit = input.bool(true, "Show Split")  
+isDisplayVolumeMA = input.bool(false, "Show MA", inline="MA")  
+
+// 成交量基础数据初始化  
+var float _prevClose = na  
+var float _volUp = 0.0  
+var float _volDn = 0.0  
+var float _volNt = 0.0  
+
+if barstate.isnew  
+    _volUp := 0  
+    _volDn := 0  
+    _volNt := 0  
+    _prevClose := close[1]  
+
+// 买卖成交量计算  
+_newVolume = volume  
+if close > _prevClose  
+    _volUp += _newVolume  
+else if close < _prevClose  
+    _volDn += _newVolume  
+else  
+    _volNt += _newVolume  
+
+_prevClose := close  
+
+// 计算总交易量和SMA、标准差  
+totVol = _volUp + _volDn + _volNt  
+smaVolume = ta.sma(volume, volumeMAPeriod)  
+stdDev = ta.stdev(volume, volumeMAPeriod)  
+
+upperBound = smaVolume + 1.5 * stdDev  
+lowerBound = smaVolume - 0.5 * stdDev  
+
+// 根据成交量大小调整透明度  
+getAlphaByVolume(float vol) =>  
+    vol < lowerBound ? 80 : vol > upperBound ? 20 : 50  
+
+// 计算颜色透明度基于方向和成交量大小  
+colorUp = color.new(color.green, getAlphaByVolume(_volUp))  
+colorDn = color.new(color.red, getAlphaByVolume(_volDn))  
+colorNt = color.new(color.gray, 60)  // 固定淡灰色透明度  
+
+// 绘图  
+color baseBarColor = close > open ? color.blue : close < open ? color.black : color.gray  
+plot(not isDisplaySplit ? volume : 0, "Total Volume", color=baseBarColor, style=plot.style_columns)  
+
+plot(isDisplaySplit ? _volUp : 0, "Volume Up", color=colorUp, style=plot.style_columns)  
+plot(isDisplaySplit ? _volDn : 0, "Volume Down", color=colorDn, style=plot.style_columns)  
+plot(isDisplaySplit ? _volNt : 0, "Volume Neutral", color=colorNt, style=plot.style_columns)  
+
+plot(isDisplayVolumeMA ? ta.ema(volume, volumeMAPeriod) : 0, "Volume MA", color=color.black, style=plot.style_line)  
+
+// 标准差线  
+plot(stdDev, "Std Dev", color=color.purple, style=plot.style_line)  
+plot(upperBound, "Upper StdDev", color=color.red, style=plot.style_line)  
+plot(lowerBound, "Lower StdDev", color=color.red, style=plot.style_line)  
+fill(plot(upperBound), plot(lowerBound), color=color.new(color.red, 90))  

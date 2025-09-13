@@ -1,0 +1,31 @@
+//@version=6
+indicator(title="Average True Range % with RMA and 1σ Bands", shorttitle="ATR % + RMA Bands", overlay=false, timeframe="", timeframe_gaps=true)
+length = input.int(title="Length", defval=14, minval=1)
+smoothing = input.string(title="Smoothing", defval="RMA", options=["RMA", "SMA", "EMA", "WMA"])
+ma_function(source, length) =>
+    switch smoothing
+        "RMA" => ta.rma(source, length)
+        "SMA" => ta.sma(source, length)
+        "EMA" => ta.ema(source, length)
+        => ta.wma(source, length)
+
+// 计算ATR百分比
+atr_value = ma_function(ta.tr(true), length)
+atr_percent = atr_value / close * 100
+
+// 画出百分比ATR
+plot(atr_percent, title="ATR %", color=color.new(#1C6CB7, 0))
+
+// 计算RMA均线（只针对ATR %，不受smoothing设定影响）
+rma_length = input.int(title="RMA Length", defval=14, minval=1)
+atr_rma = ta.rma(atr_percent, rma_length)
+
+// 计算RMA的标准差
+rma_stdev = ta.stdev(atr_percent, rma_length)
+
+// 画出RMA均线
+plot(atr_rma, title="RMA of ATR %", color=color.new(color.orange, 0), linewidth=2)
+
+// 画出RMA上下1倍标准差的带状线
+plot(atr_rma + 1.5 * rma_stdev, title="RMA + 1.5σ", color=color.new(color.green, 40), linewidth=1, style=plot.style_line)
+plot(atr_rma - 1.5 * rma_stdev, title="RMA - 1.5σ", color=color.new(color.red, 40), linewidth=1, style=plot.style_line)
